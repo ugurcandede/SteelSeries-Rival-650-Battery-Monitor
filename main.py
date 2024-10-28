@@ -37,6 +37,7 @@ def _load_models():
 class DeviceManager:
     def __init__(self):
         self.models = _load_models()
+        self.exists_model = self.find_exits_model()
 
     def open_device(self, vendor_id, product_id, endpoint=0):
         hid_device = hid.device()
@@ -46,6 +47,11 @@ class DeviceManager:
                 return HIDDevice(hid_device, vendor_id, product_id, endpoint)
         raise Exception("No device found")
 
+    def find_exits_model(self):
+        for model in self.models:
+                for interface in hid.enumerate(model['vendor_id'], model['product_id']):
+                    if interface["interface_number"] == model['endpoint'] and interface["usage"] == 1:
+                        return model
 
 class HIDDevice:
     def __init__(self, device, vendor_id, product_id, endpoint):
@@ -77,7 +83,7 @@ class BatteryStatus:
         self.device_manager = device_manager
 
     def get_status(self):
-        status = []
+        status = {}
         for model in self.device_manager.models:
             hid_device = None
             try:
@@ -88,7 +94,7 @@ class BatteryStatus:
                 )
                 data = hid_device.read(rival650.profile["battery_level"]["response_length"])
 
-                status.append({
+                status.update({
                     "name": model['name'],
                     "battery": rival650.profile["battery_level"]["level"](data),
                     "charging": rival650.profile["battery_level"]["is_charging"](data)
@@ -99,6 +105,8 @@ class BatteryStatus:
             finally:
                 if hid_device is not None:
                     hid_device.close()
+        if len(status) == 0:
+            status.update({"name": "No device found", "battery": None, "charging": None})
         return status
 
 
@@ -106,5 +114,5 @@ if __name__ == '__main__':
     device_manager = DeviceManager()
     battery_status = BatteryStatus(device_manager)
 
-    for device in battery_status.get_status():
-        print(f"{device['name']} | %{device['battery']} and it is {'(charging)' if device['charging'] else 'not charging'}")
+    device = battery_status.get_status()
+    print(f"{device['name']} | %{device['battery']} and it is {'(charging)' if device['charging'] else 'not charging'}")
