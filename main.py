@@ -46,7 +46,7 @@ class SystrayIcon:
                     self.update_systray_icon(None, "USB dongle is connected, but no mouse found", menu=Menu(
                         MenuItem(device_name, lambda: None, enabled=False),
                         MenuItem("USB dongle is connected, but no mouse found", lambda: None, enabled=False),
-                        MenuItem(f"Please wait; retrying in {REFRESH_TIMEOUT} seconds", lambda: None, enabled=False),
+                        MenuItem(f"Please wait; retrying in {ERROR_RETRY_TIMEOUT} seconds", lambda: None, enabled=False),
                         MenuItem('Quit', self.quit_app)
                     ))
                     time.sleep(1 / 20)
@@ -59,7 +59,7 @@ class SystrayIcon:
                 self.event.wait(timeout=sleep_time)
 
             except Exception as e:
-                print(f"Error: {e}\n\n{time.strftime('%H:%M:%S')} | Sleeping for {REFRESH_TIMEOUT} seconds...")
+                print(f"Error: {e}\n\n{time.strftime('%H:%M:%S')} | Sleeping for {ERROR_RETRY_TIMEOUT} seconds...")
                 time.sleep(ERROR_RETRY_TIMEOUT)
                 self.event.set()
 
