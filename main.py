@@ -1,118 +1,135 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
+import threading
+import time
 
-Author: Ugurcan Dede
-Date: 2024-10-28
-GitHub: https://github.com/ugurcandede
+from PIL import Image, ImageDraw, ImageFont
+from pystray import Icon, MenuItem, Menu
 
-Description:
-This script prints the battery level of the SteelSeries Rival 650 Wireless mouse to the console.
-It utilizes the 'hid' library to communicate with the device and retrieves battery information through HID reports.
-The program opens a connection to the mouse, sends a command to request the battery level, and processes the response
-to determine the battery percentage and charging status.
+from _init import DeviceManager, BatteryStatus
 
-Usage:
-Run this script to check the battery status of the connected SteelSeries Rival 650 Wireless mouse. The output will
-display the battery percentage and whether the device is currently charging.
-"""
-
-import hid
-import rival650
+REFRESH_TIMEOUT = 60
+ERROR_RETRY_TIMEOUT = 10
 
 
-def _load_models():
-    return [
-        {
-            "name": model["name"],
-            "vendor_id": model["vendor_id"],
-            "product_id": model["product_id"],
-            "endpoint": model["endpoint"]
-        }
-        for model in rival650.profile["models"]
-    ]
-
-
-class DeviceManager:
+class SystrayIcon:
     def __init__(self):
-        self.models = _load_models()
-        self.exists_model = self.find_exits_model()
+        self.device_manager = DeviceManager()
+        self.battery_status = BatteryStatus(self.device_manager)
+        self.last_update = None
+        self.battery_level = None
+        self.battery_charging = None
+        self.systray_icon = None
+        self.stopped = False
+        self.event = threading.Event()
 
-    def open_device(self, vendor_id, product_id, endpoint=0):
-        hid_device = hid.device()
-        for interface in hid.enumerate(vendor_id, product_id):
-            if interface["interface_number"] == endpoint and interface["usage"] == 1:
-                hid_device.open_path(interface["path"])
-                return HIDDevice(hid_device, vendor_id, product_id, endpoint)
-        raise Exception("No device found")
+    def create_menu(self, name):
+        return Menu(
+            MenuItem(f"Name: {name}", lambda: None, enabled=False),
+            MenuItem(f"Battery: {str(f'{self.battery_level}%' if self.battery_level is not None else 'N/A')}", lambda: None, enabled=False),
+            MenuItem(f"Status: {'Charging' if self.battery_charging else 'Discharging'}", lambda: None, enabled=False),
+            MenuItem("Last update: " + time.strftime("%H:%M:%S", time.localtime(self.last_update)) + " (click to refresh)", self.refresh_connection),
+            MenuItem("Quit", self.quit_app),
+        )
 
-    def find_exits_model(self):
-        for model in self.models:
-                for interface in hid.enumerate(model['vendor_id'], model['product_id']):
-                    if interface["interface_number"] == model['endpoint'] and interface["usage"] == 1:
-                        return model
-
-class HIDDevice:
-    def __init__(self, device, vendor_id, product_id, endpoint):
-        self.device = device
-        self.vendor_id = vendor_id
-        self.product_id = product_id
-        self.endpoint = endpoint
-
-    def hid_write(self, report_type=rival650.HID_REPORT_TYPE_OUTPUT, report_id=0x00, data=[], packet_length=0):
-        if packet_length > 0:
-            bytes_ = bytearray([report_id] + data + [0x00] * (packet_length - 1 - len(data)))
-        else:
-            bytes_ = bytearray([report_id] + data)
-
-        if report_type == rival650.HID_REPORT_TYPE_OUTPUT:
-            self.device.write(bytes_)
-        else:
-            raise ValueError(f"Invalid HID report type: {report_type:02x}")
-
-    def read(self, response_length, timeout_ms=200):
-        return self.device.read(response_length, timeout_ms)
-
-    def close(self):
-        self.device.close()
-
-
-class BatteryStatus:
-    def __init__(self, device_manager):
-        self.device_manager = device_manager
-
-    def get_status(self):
-        status = {}
-        for model in self.device_manager.models:
-            hid_device = None
+    def get_battery(self):
+        while not self.stopped:
             try:
-                hid_device = self.device_manager.open_device(model['vendor_id'], model['product_id'], model['endpoint'])
-                hid_device.hid_write(
-                    report_type=rival650.profile["battery_level"]["report_type"],
-                    data=rival650.profile["battery_level"]["command"]
-                )
-                data = hid_device.read(rival650.profile["battery_level"]["response_length"])
+                device = self.device_manager.exists_model
+                device_name = device['name']
 
-                status.update({
-                    "name": model['name'],
-                    "battery": rival650.profile["battery_level"]["level"](data),
-                    "charging": rival650.profile["battery_level"]["is_charging"](data)
-                })
+                print(f"{time.strftime('%H:%M:%S')} | Mouse found: {device_name}")
+                battery = self.battery_status.get_status()
 
-            except Exception:
-                pass
-            finally:
-                if hid_device is not None:
-                    hid_device.close()
-        if len(status) == 0:
-            status.update({"name": "No device found", "battery": None, "charging": None})
-        return status
+                if battery['name'] == "No device found":
+                    self.update_systray_icon(None, "USB dongle is connected, but no mouse found", menu=Menu(
+                        MenuItem(device_name, lambda: None, enabled=False),
+                        MenuItem("USB dongle is connected, but no mouse found", lambda: None, enabled=False),
+                        MenuItem(f"Please wait; retrying in {REFRESH_TIMEOUT} seconds", lambda: None, enabled=False),
+                        MenuItem('Quit', self.quit_app)
+                    ))
+                    time.sleep(1 / 20)
+                    raise Exception("USB dongle is connected, but no mouse found")
+
+                self.update_battery_info(battery)
+
+                sleep_time = REFRESH_TIMEOUT if self.battery_level is not None else 1 / 20
+                self.event.clear()
+                self.event.wait(timeout=sleep_time)
+
+            except Exception as e:
+                print(f"Error: {e}\n\n{time.strftime('%H:%M:%S')} | Sleeping for {REFRESH_TIMEOUT} seconds...")
+                time.sleep(ERROR_RETRY_TIMEOUT)
+                self.event.set()
+
+        print("Stopping thread")
+
+    def update_battery_info(self, battery):
+        self.battery_level = battery['battery']
+        self.last_update = time.time()
+        self.battery_charging = battery["charging"]
+
+        self.systray_icon.icon = self.create_image(self.battery_level)
+        self.systray_icon.menu = self.create_menu(self.device_manager.exists_model['name'])
+        self.systray_icon.title = f"Mouse Battery: {str(f'{self.battery_level}%' if self.battery_level is not None else 'N/A')}"
+
+    def update_systray_icon(self, percentage, title, menu):
+        self.systray_icon.icon = self.create_image(percentage)
+        self.systray_icon.title = title
+
+        if menu is not None:
+            self.systray_icon.menu = menu
+
+        self.systray_icon.update_menu()
+
+    def create_image(self, percentage):
+        img = Image.new('RGBA', (50, 50), color=(255, 255, 255, 90))
+        d = ImageDraw.Draw(img)
+
+        color, level = self.get_color_and_level(percentage)
+
+        d.rectangle([(0, level), (50, 50)], fill=color, outline=None)
+        font_type = ImageFont.truetype("arial.ttf", 31)
+        d.text((0, 15), f"{'N/A' if percentage is None else percentage}", fill="white", font=font_type)
+
+        return img
+
+    def get_color_and_level(self, percentage):
+        if percentage is None:
+            return "purple", 0
+
+        if percentage <= 20:
+            return "red", 40
+        elif percentage <= 50:
+            return "orange", 25
+        else:
+            return "green", 0
+
+    def refresh_connection(self):
+        self.event.set()
+
+    def quit_app(self, icon, item):
+        self.stopped = True
+        icon.stop()
+
+    def start(self):
+        self.systray_icon = Icon("Battery", self.create_image(None), "Connecting", menu=Menu(
+            MenuItem("Loading, please wait...", lambda: None),
+            MenuItem('Quit', self.quit_app)
+        ))
+
+        thread = threading.Thread(target=self.get_battery)
+        thread.daemon = True
+        thread.start()
+
+        self.systray_icon.run()
 
 
-if __name__ == '__main__':
-    device_manager = DeviceManager()
-    battery_status = BatteryStatus(device_manager)
+def main():
+    monitor = SystrayIcon()
+    monitor.start()
 
-    device = battery_status.get_status()
-    print(f"{device['name']} | %{device['battery']} and it is {'(charging)' if device['charging'] else 'not charging'}")
+
+if __name__ == "__main__":
+    main()
