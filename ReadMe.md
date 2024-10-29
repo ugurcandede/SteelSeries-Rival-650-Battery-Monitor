@@ -18,7 +18,8 @@ the battery percentage and the charging status.
 ## Requirements
 
 - Python 3.x
-- `hid` library (can be installed via pip)
+- `hidapi` library (can be installed via pip)
+- `pystray` library (can be installed via pip)
 
 ## Installation
 
@@ -37,14 +38,19 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the script to check the battery status of the connected SteelSeries Rival 650 Wireless mouse. The output will
-display the battery percentage and whether the device is currently charging.
+Run the script to check the battery status of the connected SteelSeries Rival 650 Wireless mouse. An icon will be
+displayed in the system tray.
 
 ```bash
-python battery_monitor.py
+python main.py
 ```
 
 ## Output
+
+The main script executed an icon will be displayed in the system tray.
+
+Otherwise, if `_init.py` is executed, will output the battery percentage and the charging status of the device. The
+output will be as follows:
 
 ```
 SteelSeries Rival 650 Wireless (wired mode) | 75% and it is charging
