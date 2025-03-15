@@ -37,6 +37,10 @@ class SystrayIcon:
         while not self.stopped:
             try:
                 device = self.device_manager.exists_model
+
+                if device is None:
+                    raise Exception("No device found")
+
                 device_name = device['name']
 
                 print(f"{time.strftime('%H:%M:%S')} | Mouse found: {device_name}")
@@ -60,7 +64,18 @@ class SystrayIcon:
 
             except Exception as e:
                 print(f"Error: {e}\n\n{time.strftime('%H:%M:%S')} | Sleeping for {ERROR_RETRY_TIMEOUT} seconds...")
+
+                self.update_systray_icon(None, "No device Found!", menu=Menu(
+                    MenuItem("No device Found!", lambda: None, enabled=False),
+                    MenuItem(f"Please wait; retrying in {ERROR_RETRY_TIMEOUT} seconds", lambda: None, enabled=False),
+                    MenuItem('Quit', self.quit_app)
+                ))
+
                 time.sleep(ERROR_RETRY_TIMEOUT)
+                # Refresh the device manager. This is necessary because the device may have been disconnected or changed mode
+                self.device_manager = DeviceManager()
+                self.battery_status = BatteryStatus(self.device_manager)
+
                 self.event.set()
 
         print("Stopping thread")
@@ -99,14 +114,16 @@ class SystrayIcon:
         if percentage is None:
             return "purple", 0
 
-        if percentage <= 20:
-            return "red", 40
-        elif percentage <= 50:
+        if percentage > 75:
+            return "green", 0
+        elif percentage >= 30:
             return "orange", 25
         else:
-            return "green", 0
+            return "red", 40
 
     def refresh_connection(self):
+        self.device_manager = DeviceManager()
+        self.battery_status = BatteryStatus(self.device_manager)
         self.event.set()
 
     def quit_app(self, icon, item):

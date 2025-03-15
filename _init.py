@@ -20,7 +20,7 @@ display the battery percentage and whether the device is currently charging.
 
 import hid
 
-import rival650
+import devices
 
 
 def _load_models():
@@ -31,7 +31,7 @@ def _load_models():
             "product_id": model["product_id"],
             "endpoint": model["endpoint"]
         }
-        for model in rival650.profile["models"]
+        for models in devices.profile for model in models["models"]
     ]
 
 
@@ -62,13 +62,13 @@ class HIDDevice:
         self.product_id = product_id
         self.endpoint = endpoint
 
-    def hid_write(self, report_type=rival650.HID_REPORT_TYPE_OUTPUT, report_id=0x00, data=[], packet_length=0):
+    def hid_write(self, report_type=devices.HID_REPORT_TYPE_OUTPUT, report_id=0x00, data=[], packet_length=0):
         if packet_length > 0:
             bytes_ = bytearray([report_id] + data + [0x00] * (packet_length - 1 - len(data)))
         else:
             bytes_ = bytearray([report_id] + data)
 
-        if report_type == rival650.HID_REPORT_TYPE_OUTPUT:
+        if report_type == devices.HID_REPORT_TYPE_OUTPUT:
             self.device.write(bytes_)
         else:
             raise ValueError(f"Invalid HID report type: {report_type:02x}")
@@ -90,16 +90,22 @@ class BatteryStatus:
             hid_device = None
             try:
                 hid_device = self.device_manager.open_device(model['vendor_id'], model['product_id'], model['endpoint'])
+
+                # find battery profile over product_id on devices.py
+                device_battery_profile = next((device_["battery_level"] for device_ in devices.profile if any(
+                    model_["product_id"] == model["product_id"] for model_ in device_["models"])), None)
+
                 hid_device.hid_write(
-                    report_type=rival650.profile["battery_level"]["report_type"],
-                    data=rival650.profile["battery_level"]["command"]
+                    report_type=device_battery_profile["report_type"],
+                    data=device_battery_profile["command"]
                 )
-                data = hid_device.read(rival650.profile["battery_level"]["response_length"])
+
+                data = hid_device.read(device_battery_profile["response_length"])
 
                 status.update({
                     "name": model['name'],
-                    "battery": rival650.profile["battery_level"]["level"](data),
-                    "charging": rival650.profile["battery_level"]["is_charging"](data)
+                    "battery": device_battery_profile["level"](data),
+                    "charging": device_battery_profile["is_charging"](data)
                 })
 
             except Exception:
