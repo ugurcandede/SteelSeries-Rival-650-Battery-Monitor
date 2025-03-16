@@ -14,7 +14,7 @@ It provides real-time monitoring of the battery status and charging state throug
 
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from PIL import Image, ImageDraw, ImageFont
 from pystray import Icon, MenuItem, Menu
@@ -39,10 +39,28 @@ BATTERY_MEDIUM = 30
 
 # Battery Level Colors and Positions
 BATTERY_LEVELS = {
-    "high": ("green", 0),
-    "medium": ("orange", 25),
-    "low": ("red", 40),
-    "unknown": ("purple", 0)
+    "high": ("#4CAF50", 5),     # Material Design Green
+    "medium": ("#FF9800", 15),  # Material Design Orange
+    "low": ("#F44336", 30),     # Material Design Red
+    "unknown": ("#9C27B0", 5)   # Material Design Purple
+}
+
+# Text Colors for Different Backgrounds
+TEXT_COLORS = {
+    "#4CAF50": "#FFFFFF",  # White on Green
+    "#FF9800": "#000000",  # Black on Orange
+    "#F44336": "#FFFFFF",  # White on Red
+    "#9C27B0": "#FFFFFF",  # White on Purple
+}
+
+# Charging Indicator Settings
+CHARGING_INDICATOR = {
+    "color": "#FFD700",        # Gold color for charging
+    "glow_color": "#FFE57F",   # Light yellow for glow effect
+    "size": 12,                # Size of the indicator
+    "border": 2,               # Border thickness
+    "position": (4, 4),        # Top-left position
+    "symbol_color": "#2C2C2C"  # Dark gray for the lightning symbol
 }
 
 class DeviceConnectionError(Exception):
@@ -172,10 +190,17 @@ class SystrayIcon:
         self.last_update = time.time()
         self.battery_charging = battery["charging"]
 
+        title_parts = [
+            "Mouse Battery:",
+            f"{self.battery_level}%" if self.battery_level is not None else "N/A",
+        ]
+        
+        if self.battery_charging:
+            title_parts.append("(Charging ⚡)")
+
         self.systray_icon.icon = self.create_image(self.battery_level)
         self.systray_icon.menu = self.create_menu(self.device_manager.exists_model['name'])
-        self.systray_icon.title = (f"Mouse Battery: "
-                                  f"{f'{self.battery_level}%' if self.battery_level is not None else 'N/A'}")
+        self.systray_icon.title = " ".join(title_parts)
 
     def update_systray_icon(self, percentage: Optional[int], title: str, menu: Optional[Menu] = None) -> None:
         """Update the system tray icon appearance and menu."""
@@ -187,24 +212,115 @@ class SystrayIcon:
             self.systray_icon.update_menu()
 
     def create_image(self, percentage: Optional[int]) -> Image.Image:
-        """Create the battery indicator image."""
-        img = Image.new('RGBA', ICON_SIZE, color=ICON_BG_COLOR)
+        """Create the battery indicator image with modern design."""
+        # Create base image with transparency
+        img = Image.new('RGBA', ICON_SIZE, color=(0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
+        # Get battery color and level
         color, level = self.get_color_and_level(percentage)
-        draw.rectangle([(0, level), ICON_SIZE], fill=color, outline=None)
         
+        # Calculate actual drawing coordinates
+        start_y = max(0, min(level, ICON_SIZE[1] - 8))  # Ensure y coordinate is within bounds
+        
+        # Draw rounded rectangle for battery background
+        radius = 8
+        self._draw_rounded_rectangle(
+            draw,
+            [(0, start_y), ICON_SIZE],
+            color,
+            radius
+        )
+
+        # Draw percentage text with better positioning
         font_type = ImageFont.truetype(FONT_NAME, FONT_SIZE)
-        draw.text((0, 15), f"{'N/A' if percentage is None else percentage}", 
-                 fill=FONT_COLOR, font=font_type)
+        text = 'N/A' if percentage is None else str(percentage)
+        
+        # Calculate text position for center alignment
+        text_bbox = draw.textbbox((0, 0), text, font=font_type)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_x = (ICON_SIZE[0] - text_width) // 2
+        
+        # Get appropriate text color for current background
+        text_color = TEXT_COLORS.get(color, "#FFFFFF")
+        
+        # Draw main text
+        draw.text(
+            (text_x, 15),
+            text,
+            fill=text_color,
+            font=font_type
+        )
+
+        # Draw charging indicator if charging
+        if self.battery_charging:
+            self._draw_charging_indicator(draw)
 
         return img
+
+    def _draw_rounded_rectangle(self, draw: ImageDraw.Draw,
+                              coords: List[Tuple[int, int]],
+                              color: str,
+                              radius: int) -> None:
+        """Draw a rounded rectangle."""
+        x1, y1 = coords[0]
+        x2, y2 = coords[1]
+
+        # Draw main rectangle
+        draw.rectangle(
+            [(x1 + radius, y1), (x2 - radius, y2)],
+            fill=color
+        )
+        draw.rectangle(
+            [(x1, y1 + radius), (x2, y2 - radius)],
+            fill=color
+        )
+
+        # Draw corners
+        draw.pieslice([(x1, y1), (x1 + radius * 2, y1 + radius * 2)],
+                     180, 270, fill=color)
+        draw.pieslice([(x2 - radius * 2, y1), (x2, y1 + radius * 2)],
+                     270, 360, fill=color)
+        draw.pieslice([(x1, y2 - radius * 2), (x1 + radius * 2, y2)],
+                     90, 180, fill=color)
+        draw.pieslice([(x2 - radius * 2, y2 - radius * 2), (x2, y2)],
+                     0, 90, fill=color)
+
+    def _draw_charging_indicator(self, draw: ImageDraw.Draw) -> None:
+        """Draw an animated-looking charging indicator."""
+        ci = CHARGING_INDICATOR
+        x, y = ci["position"]
+        size = ci["size"]
+        
+        # Draw outer glow
+        glow_size = size + 4
+        draw.ellipse(
+            [(x - 2, y - 2), (x + glow_size, y + glow_size)],
+            fill=ci["glow_color"]
+        )
+        
+        # Draw main circle
+        draw.ellipse(
+            [(x, y), (x + size, y + size)],
+            fill=ci["color"],
+            outline=ci["glow_color"],
+            width=ci["border"]
+        )
+
+        # Draw lightning bolt symbol
+        bolt_points = [
+            (x + size//2 - 2, y + 2),           # Top point
+            (x + size//2 + 3, y + size//2),     # Middle right
+            (x + size//2 - 1, y + size//2),     # Middle center
+            (x + size//2 + 2, y + size - 2)     # Bottom point
+        ]
+        draw.line(bolt_points, fill=ci["symbol_color"], width=2)
 
     def get_color_and_level(self, percentage: Optional[int]) -> Tuple[str, int]:
         """Get the appropriate color and level for the battery indicator."""
         if percentage is None:
             return BATTERY_LEVELS["unknown"]
-        
+
         if percentage > BATTERY_HIGH:
             return BATTERY_LEVELS["high"]
         elif percentage >= BATTERY_MEDIUM:
